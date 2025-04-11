@@ -23,5 +23,5 @@ IMU_PACKET_FORMAT = '<ffffff'     # 6 little-endian floats (ax,ay,az,gx,gy,gz)
 IMU_PACKET_SIZE_BYTES = struct.calcsize(IMU_PACKET_FORMAT) # Should be 24
 
 # --- Output Files ---
-OUTPUT_FILENAME_AUDIO = "final_audio_data.txt"
-OUTPUT_FILENAME_IMU = "imu_data.csv"
+OUTPUT_FILENAME_AUDIO = "collected_data/final_audio_data.txt"
+OUTPUT_FILENAME_IMU = "collected_data/imu_data.csv"
