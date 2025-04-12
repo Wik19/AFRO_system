@@ -4,6 +4,7 @@ import serial_handler
 import audio_processing
 import imu_processing
 import plotting
+import traceback
 
 def main():
     """
@@ -31,15 +32,16 @@ def main():
          fft_audio_mag) = audio_processing.process_audio(all_audio_samples)
 
         # --- Step 3: Process IMU Data ---
-        # Unpack the new return values from process_imu
+        # Unpack the return values from process_imu, including fused_angles
         (imu_data_np,
          imu_time_axis,
          effective_imu_rate,
          fft_imu_freq,
          fft_imu_mag_z,
-         imu_velocity,          # New
-         imu_position,          # New
-         imu_angular_position   # New
+         imu_velocity,          # Still returned, even if not plotted
+         imu_position,          # Still returned, even if not plotted
+         imu_angular_position,  # Raw integrated angles (still returned)
+         imu_fused_angles       # Fused angles from Complementary Filter
          ) = imu_processing.process_imu(all_imu_samples, actual_duration)
 
         # --- Step 4: Plotting ---
@@ -53,16 +55,17 @@ def main():
             )
 
         if imu_data_np is not None:
-            # Pass the new integrated data to plot_imu_data
+            # Pass the correct arguments to plot_imu_data, including fused_angles
             imu_fig = plotting.plot_imu_data(
                 imu_data_np,
                 imu_time_axis,
                 effective_imu_rate,
                 fft_imu_freq,
                 fft_imu_mag_z,
-                imu_velocity,         # Pass velocity (optional, not plotted by default now)
-                imu_position,         # Pass position
-                imu_angular_position  # Pass angular position
+                imu_velocity,         # Pass velocity (ignored by plotting function now)
+                imu_position,         # Pass position (ignored by plotting function now)
+                imu_angular_position, # Pass raw angles (ignored by plotting function now)
+                imu_fused_angles      # Pass fused angles (used by plotting function)
             )
 
         # --- Step 5: Show Plots ---
@@ -73,14 +76,11 @@ def main():
         print("\nScript interrupted by user (Ctrl+C).")
     except Exception as e:
         print(f"\nAn unexpected error occurred in the main script: {e}")
-        # Consider adding traceback for debugging
-        import traceback
-        traceback.print_exc()
+        traceback.print_exc()  # Print detailed traceback
     finally:
         print("\nScript finished.")
-        # Consider removing sys.exit(0) if running interactively or within a larger app
-        # sys.exit(0)
 
 if __name__ == "__main__":
-    # Ensure you have scipy installed: pip install scipy
+    # Ensure you have necessary libraries installed:
+    # pip install pyserial numpy scipy matplotlib
     main()

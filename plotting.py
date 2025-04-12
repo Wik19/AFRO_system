@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import config
+import math # For converting radians to degrees if desired
 
 def plot_audio_data(original_samples, final_audio_samples, effective_audio_sample_rate, fft_audio_freq, fft_audio_magnitude):
     """Generates plots for audio data analysis."""
@@ -56,19 +57,20 @@ def plot_audio_data(original_samples, final_audio_samples, effective_audio_sampl
 
 def plot_imu_data(imu_data_np, imu_time_axis, effective_imu_sample_rate,
                   fft_imu_freq, fft_imu_magnitude_z,
-                  velocity, position, angular_position): # Updated signature
-    """Generates plots for IMU data analysis, including integrated values."""
+                  velocity, position, angular_position, # Raw integrated angles (still received but not plotted)
+                  fused_angles): # Added fused angles
+    """Generates plots for IMU data analysis, focusing on raw data and fused orientation."""
     if imu_data_np is None or imu_time_axis is None:
          print("No IMU samples available for plotting.")
-         return None # Return None if no figure generated
+         return None
 
     try:
         print("\nGenerating IMU plots...")
-        # Increase figure height and number of subplots
-        fig_imu, ax_imu = plt.subplots(4, 1, figsize=(12, 12), sharex=True) # 4 rows now
-        fig_imu.suptitle("IMU Data Analysis (Includes Integrated Estimates)")
+        # Reduce figure height and number of subplots as position/raw angles are removed
+        fig_imu, ax_imu = plt.subplots(3, 1, figsize=(12, 9), sharex=True) # 3 rows now
+        fig_imu.suptitle("IMU Data Analysis (Raw Data & Fused Orientation)")
 
-        # Plot 1: Accelerometer Data (Original)
+        # Plot 1: Accelerometer Data
         ax_imu[0].plot(imu_time_axis, imu_data_np[:, 0], label='Accel X', alpha=0.8)
         ax_imu[0].plot(imu_time_axis, imu_data_np[:, 1], label='Accel Y', alpha=0.8)
         ax_imu[0].plot(imu_time_axis, imu_data_np[:, 2], label='Accel Z', alpha=0.8)
@@ -77,43 +79,31 @@ def plot_imu_data(imu_data_np, imu_time_axis, effective_imu_sample_rate,
         ax_imu[0].grid(True)
         ax_imu[0].legend()
 
-        # Plot 2: Estimated Position (Integrated Acceleration)
-        if position is not None:
-            ax_imu[1].plot(imu_time_axis, position[:, 0], label='Position X (est.)', alpha=0.8)
-            ax_imu[1].plot(imu_time_axis, position[:, 1], label='Position Y (est.)', alpha=0.8)
-            ax_imu[1].plot(imu_time_axis, position[:, 2], label='Position Z (est.)', alpha=0.8)
-            ax_imu[1].set_ylabel("Position (m)")
-            ax_imu[1].set_title("Estimated Position (from Accel Integration - Prone to Drift)")
-            ax_imu[1].grid(True)
-            ax_imu[1].legend()
+        # Plot 2: Gyroscope Data
+        ax_imu[1].plot(imu_time_axis, imu_data_np[:, 3], label='Gyro X', alpha=0.8)
+        ax_imu[1].plot(imu_time_axis, imu_data_np[:, 4], label='Gyro Y', alpha=0.8)
+        ax_imu[1].plot(imu_time_axis, imu_data_np[:, 5], label='Gyro Z', alpha=0.8)
+        ax_imu[1].set_ylabel("Gyro (rad/s)")
+        ax_imu[1].set_title("Gyroscope Data")
+        ax_imu[1].grid(True)
+        ax_imu[1].legend()
+
+        # Plot 3: Fused Orientation Angles (Complementary Filter) - Moved to ax_imu[2]
+        if fused_angles is not None:
+            fused_angles_deg = np.degrees(fused_angles)
+            ax_imu[2].plot(imu_time_axis, fused_angles_deg[:, 0], label='Fused Roll', alpha=0.8)
+            ax_imu[2].plot(imu_time_axis, fused_angles_deg[:, 1], label='Fused Pitch', alpha=0.8)
+            ax_imu[2].plot(imu_time_axis, fused_angles_deg[:, 2], label='Fused Yaw (Drifts)', alpha=0.6, linestyle='--')
+            ax_imu[2].set_ylabel("Angle (degrees)")
+            ax_imu[2].set_title("Fused Orientation (Complementary Filter)")
+            ax_imu[2].grid(True)
+            ax_imu[2].legend()
         else:
-             ax_imu[1].text(0.5, 0.5, 'Position data not available', horizontalalignment='center', verticalalignment='center')
-             ax_imu[1].set_title("Estimated Position")
+             ax_imu[2].text(0.5, 0.5, 'Fused angle data not available', horizontalalignment='center', verticalalignment='center')
+             ax_imu[2].set_title("Fused Orientation")
 
-        # Plot 3: Gyroscope Data (Original)
-        ax_imu[2].plot(imu_time_axis, imu_data_np[:, 3], label='Gyro X', alpha=0.8)
-        ax_imu[2].plot(imu_time_axis, imu_data_np[:, 4], label='Gyro Y', alpha=0.8)
-        ax_imu[2].plot(imu_time_axis, imu_data_np[:, 5], label='Gyro Z', alpha=0.8)
-        ax_imu[2].set_ylabel("Gyro (rad/s)")
-        ax_imu[2].set_title("Gyroscope Data")
-        ax_imu[2].grid(True)
-        ax_imu[2].legend()
-
-        # Plot 4: Estimated Angular Position (Integrated Gyro)
-        if angular_position is not None:
-            ax_imu[3].plot(imu_time_axis, angular_position[:, 0], label='Angle X (est.)', alpha=0.8)
-            ax_imu[3].plot(imu_time_axis, angular_position[:, 1], label='Angle Y (est.)', alpha=0.8)
-            ax_imu[3].plot(imu_time_axis, angular_position[:, 2], label='Angle Z (est.)', alpha=0.8)
-            ax_imu[3].set_ylabel("Angle (rad)")
-            ax_imu[3].set_title("Estimated Angular Position (from Gyro Integration - Prone to Drift)")
-            ax_imu[3].grid(True)
-            ax_imu[3].legend()
-        else:
-             ax_imu[3].text(0.5, 0.5, 'Angular Position data not available', horizontalalignment='center', verticalalignment='center')
-             ax_imu[3].set_title("Estimated Angular Position")
-
-        # Common X label for the bottom plot
-        ax_imu[3].set_xlabel("Time (s)")
+        # Common X label for the new bottom plot (Fused Angles)
+        ax_imu[2].set_xlabel("Time (s)")
 
         fig_imu.tight_layout(rect=[0, 0.03, 1, 0.96]) # Adjust rect for suptitle
         return fig_imu
