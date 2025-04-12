@@ -60,22 +60,29 @@ def plot_imu_data(imu_data_np, imu_time_axis, effective_imu_sample_rate,
                   velocity, position, angular_position, # Raw integrated angles (still received but not plotted)
                   fused_angles): # Added fused angles
     """Generates plots for IMU data analysis, focusing on raw data and fused orientation."""
-    if imu_data_np is None or imu_time_axis is None:
-         print("No IMU samples available for plotting.")
+    # Check if essential data is missing
+    if imu_data_np is None:
+         print("No IMU samples available for plotting (imu_data_np is None).")
+         return None
+    if imu_time_axis is None:
+         print("IMU time axis not available, cannot plot time-series data.")
+         # Optionally, could plot just raw data vs sample index if needed
+         # For now, return None if time axis is missing
          return None
 
     try:
         print("\nGenerating IMU plots...")
-        # Reduce figure height and number of subplots as position/raw angles are removed
-        fig_imu, ax_imu = plt.subplots(3, 1, figsize=(12, 9), sharex=True) # 3 rows now
+        fig_imu, ax_imu = plt.subplots(3, 1, figsize=(12, 9), sharex=True) # 3 rows
         fig_imu.suptitle("IMU Data Analysis (Raw Data & Fused Orientation)")
+
+        rate_text = f"{effective_imu_sample_rate:.1f} Hz" if effective_imu_sample_rate is not None else "N/A"
 
         # Plot 1: Accelerometer Data
         ax_imu[0].plot(imu_time_axis, imu_data_np[:, 0], label='Accel X', alpha=0.8)
         ax_imu[0].plot(imu_time_axis, imu_data_np[:, 1], label='Accel Y', alpha=0.8)
         ax_imu[0].plot(imu_time_axis, imu_data_np[:, 2], label='Accel Z', alpha=0.8)
         ax_imu[0].set_ylabel("Accel (m/s^2)")
-        ax_imu[0].set_title(f"Accelerometer Data (Est. Rate: {effective_imu_sample_rate:.1f} Hz)")
+        ax_imu[0].set_title(f"Accelerometer Data (Est. Rate: {rate_text})")
         ax_imu[0].grid(True)
         ax_imu[0].legend()
 
@@ -88,8 +95,9 @@ def plot_imu_data(imu_data_np, imu_time_axis, effective_imu_sample_rate,
         ax_imu[1].grid(True)
         ax_imu[1].legend()
 
-        # Plot 3: Fused Orientation Angles (Complementary Filter) - Moved to ax_imu[2]
-        if fused_angles is not None:
+        # Plot 3: Fused Orientation Angles (Complementary Filter)
+        # Check if fused_angles data is valid before plotting
+        if fused_angles is not None and isinstance(fused_angles, np.ndarray) and fused_angles.shape[0] == len(imu_time_axis):
             fused_angles_deg = np.degrees(fused_angles)
             ax_imu[2].plot(imu_time_axis, fused_angles_deg[:, 0], label='Fused Roll', alpha=0.8)
             ax_imu[2].plot(imu_time_axis, fused_angles_deg[:, 1], label='Fused Pitch', alpha=0.8)
@@ -99,17 +107,22 @@ def plot_imu_data(imu_data_np, imu_time_axis, effective_imu_sample_rate,
             ax_imu[2].grid(True)
             ax_imu[2].legend()
         else:
-             ax_imu[2].text(0.5, 0.5, 'Fused angle data not available', horizontalalignment='center', verticalalignment='center')
+             # Display message if fused angles cannot be plotted
+             ax_imu[2].text(0.5, 0.5, 'Fused angle data not available or invalid',
+                            horizontalalignment='center', verticalalignment='center', transform=ax_imu[2].transAxes)
              ax_imu[2].set_title("Fused Orientation")
+             print("--- Skipping Fused Angle plot: Data not available or invalid. ---") # Debug print
 
-        # Common X label for the new bottom plot (Fused Angles)
+        # Common X label for the bottom plot
         ax_imu[2].set_xlabel("Time (s)")
 
-        fig_imu.tight_layout(rect=[0, 0.03, 1, 0.96]) # Adjust rect for suptitle
+        fig_imu.tight_layout(rect=[0, 0.03, 1, 0.96])
         return fig_imu
 
     except Exception as plot_error:
          print(f"Error generating IMU plot: {plot_error}")
+         import traceback
+         traceback.print_exc() # Print detailed traceback for plotting errors
          return None
 
 def show_plots():

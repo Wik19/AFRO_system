@@ -1,8 +1,14 @@
 import struct
 
-# --- Serial Configuration ---
-SERIAL_PORT = 'COM3'          # !!! CHANGE THIS to your ESP32's serial port !!!
-BAUD_RATE = 2000000           # !!! MUST MATCH the ESP32's SERIAL_BAUD_RATE !!!
+# --- Serial Configuration (Keep commented or remove if only using TCP) ---
+# SERIAL_PORT = 'COM3'          # !!! CHANGE THIS to your ESP32's serial port !!!
+# BAUD_RATE = 2000000           # !!! MUST MATCH the ESP32's SERIAL_BAUD_RATE !!!
+
+# --- Network Configuration (TCP Client) ---
+ESP32_TCP_HOST = '192.168.78.42' # !!! CHANGE THIS to the ESP32's IP address !!!
+ESP32_TCP_PORT = 8088            # !!! CHANGE THIS to the port the ESP32 server is listening on !!!
+
+# --- General Configuration ---
 DURATION_SECONDS = 10         # How long to record data
 
 # --- Audio Processing Configuration ---
@@ -23,5 +29,5 @@ IMU_PACKET_FORMAT = '<ffffff'     # 6 little-endian floats (ax,ay,az,gx,gy,gz)
 IMU_PACKET_SIZE_BYTES = struct.calcsize(IMU_PACKET_FORMAT) # Should be 24
 
 # --- Output Files ---
-OUTPUT_FILENAME_AUDIO = "collected_data/final_audio_data.txt"
-OUTPUT_FILENAME_IMU = "collected_data/imu_data.csv"
+OUTPUT_FILENAME_AUDIO = "final_audio_data.txt"
+OUTPUT_FILENAME_IMU = "imu_data.csv"
