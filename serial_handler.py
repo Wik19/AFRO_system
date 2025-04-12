@@ -1,7 +1,7 @@
 import serial
 import time
 import struct
-import config # Import configuration constants
+import config
 
 def receive_data(port, baud_rate, duration_seconds):
     """

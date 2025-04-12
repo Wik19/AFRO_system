@@ -8,9 +8,9 @@ DURATION_SECONDS = 10         # How long to record data
 # --- Audio Processing Configuration ---
 # Note: ORIGINAL_SAMPLE_RATE is estimated based on ESP32 sending rate.
 # Actual rate might vary slightly. If needed, adjust based on collected data count and duration.
-ORIGINAL_AUDIO_SAMPLE_RATE = 48000 # Nominal rate from ESP32 config
-AUDIO_BYTES_PER_SAMPLE = 4       # int32_t from ESP32
-AUDIO_SAMPLE_FORMAT = '<i'       # Little-endian signed integer
+ORIGINAL_AUDIO_SAMPLE_RATE = 48000 # 48kHz * 90/112.5 to compensate loss
+AUDIO_BYTES_PER_SAMPLE = 4         # int32_t
+AUDIO_SAMPLE_FORMAT = '<i'         # Little-endian signed integer
 
 AUDIO_DOWNSAMPLE_RATE = 50       # Downsample factor for audio plots/analysis
 TARGET_AUDIO_NYQUIST_FREQ = (ORIGINAL_AUDIO_SAMPLE_RATE / AUDIO_DOWNSAMPLE_RATE) / 2.0

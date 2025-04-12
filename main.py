@@ -1,9 +1,9 @@
 import sys
-import config               # Import configuration constants
-import serial_handler       # Import serial communication functions
-import audio_processing     # Import audio processing functions
-import imu_processing       # Import IMU processing functions
-import plotting             # Import plotting functions
+import config
+import serial_handler
+import audio_processing
+import imu_processing
+import plotting
 
 def main():
     """
@@ -31,11 +31,16 @@ def main():
          fft_audio_mag) = audio_processing.process_audio(all_audio_samples)
 
         # --- Step 3: Process IMU Data ---
+        # Unpack the new return values from process_imu
         (imu_data_np,
          imu_time_axis,
          effective_imu_rate,
          fft_imu_freq,
-         fft_imu_mag_z) = imu_processing.process_imu(all_imu_samples, actual_duration)
+         fft_imu_mag_z,
+         imu_velocity,          # New
+         imu_position,          # New
+         imu_angular_position   # New
+         ) = imu_processing.process_imu(all_imu_samples, actual_duration)
 
         # --- Step 4: Plotting ---
         if final_audio_samples is not None:
@@ -48,12 +53,16 @@ def main():
             )
 
         if imu_data_np is not None:
+            # Pass the new integrated data to plot_imu_data
             imu_fig = plotting.plot_imu_data(
                 imu_data_np,
                 imu_time_axis,
                 effective_imu_rate,
                 fft_imu_freq,
-                fft_imu_mag_z
+                fft_imu_mag_z,
+                imu_velocity,         # Pass velocity (optional, not plotted by default now)
+                imu_position,         # Pass position
+                imu_angular_position  # Pass angular position
             )
 
         # --- Step 5: Show Plots ---
@@ -64,10 +73,14 @@ def main():
         print("\nScript interrupted by user (Ctrl+C).")
     except Exception as e:
         print(f"\nAn unexpected error occurred in the main script: {e}")
-        # Consider more specific error handling or logging
+        # Consider adding traceback for debugging
+        import traceback
+        traceback.print_exc()
     finally:
         print("\nScript finished.")
-        sys.exit(0)
+        # Consider removing sys.exit(0) if running interactively or within a larger app
+        # sys.exit(0)
 
 if __name__ == "__main__":
+    # Ensure you have scipy installed: pip install scipy
     main()

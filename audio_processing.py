@@ -1,7 +1,7 @@
 import numpy as np
 from scipy import signal
 import numpy.fft as fft
-import config # Import configuration constants
+import config
 
 def process_audio(all_audio_samples):
     """
