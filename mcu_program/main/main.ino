@@ -71,6 +71,48 @@ WiFiClient client; // Holds the current connected client
 // --- End WiFi Additions ---
 
 /**
+ * @brief Helper function to ensure all bytes are written to the client.
+ * Handles partial writes and checks for client connection status.
+ * @param client The WiFiClient to write to.
+ * @param buffer Pointer to the data buffer to send.
+ * @param length Number of bytes to send from the buffer.
+ * @return true if all bytes were successfully written, false otherwise (e.g., client disconnected).
+ */
+bool writeAll(WiFiClient& client, const uint8_t* buffer, size_t length) {
+    size_t written = 0;
+    unsigned long startTime = millis(); // Optional: Add a timeout for writes
+    const unsigned long writeTimeout = 5000; // Example: 5 seconds timeout per writeAll call
+
+    while (written < length) {
+        // Check connection status *before* attempting to write
+        if (!client || !client.connected()) {
+            Serial.println("writeAll: Client disconnected before write completion.");
+            return false;
+        }
+
+        // Attempt to write remaining bytes
+        size_t result = client.write(buffer + written, length - written);
+
+        if (result > 0) {
+            written += result;
+            startTime = millis(); // Reset timeout counter on successful write
+        } else {
+            // result == 0 means write buffer is likely full or other transient issue.
+            // Check for timeout to prevent infinite loop if client is stuck/unresponsive
+            if (millis() - startTime > writeTimeout) {
+                 Serial.println("writeAll: Write timed out.");
+                 return false;
+            }
+            // Yield to other tasks (like WiFi background tasks)
+            // Using delay(1) is simple; vTaskDelay(1) is better if using FreeRTOS explicitly
+            delay(1);
+        }
+    }
+    return true; // All bytes were written successfully
+}
+
+
+/**
  * @brief Configures and installs the I2S driver
  */
 void setupI2S() {
@@ -171,8 +213,15 @@ void setupIMU() {
     }
 
     // Set Gyro Output Data Rate (ODR) (Example: match accelerometer 6.66 KHz)
-    lsm6ds.setGyroDataRate(LSM6DS_RATE_6_66K_HZ); // Use underscore version
+    // Inside setupIMU(), after printing Gyro range:
+    Serial.println("Attempting to set Gyro Data Rate (6.66kHz)..."); // <-- ADD THIS
+    //lsm6ds.setGyroDataRate(LSM6DS_RATE_6_66K_HZ); // Suspected line
+    lsm6ds.setGyroDataRate(LSM6DS_RATE_208_HZ);
+    Serial.println("Gyro Data Rate set function finished."); // <-- ADD THIS
     Serial.print("Gyro data rate set to: ");
+    // ... rest of the switch statement ...
+    //lsm6ds.setGyroDataRate(LSM6DS_RATE_6_66K_HZ); // Use underscore version
+    //Serial.print("Gyro data rate set to: ");
      switch (lsm6ds.getGyroDataRate()) {
         case LSM6DS_RATE_SHUTDOWN: Serial.println("Shutdown"); break;
         case LSM6DS_RATE_12_5_HZ: Serial.println("12.5 Hz"); break;
@@ -238,80 +287,119 @@ void setup() {
     Serial.println("Setup complete. Waiting for client connection..."); // Original message
 }
 
-
 /**
- * @brief Main Loop Function
+ * @brief Main Loop Function - Reads sensors and sends data reliably over TCP
  */
 void loop() {
 
   // --- Check for and handle TCP client connection ---
   if (!client || !client.connected()) {
-      // If no client is connected, check for a new one
-      client = server.available();
-      if (client) {
-          Serial.println("\nNew client connected!");
-      }
-      // Optional: Slow down loop slightly if no client is connected
-      // delay(100);
-      // return; // Or just don't send data if no client
+    // If no client is connected OR the existing client disconnected,
+    // stop the previous client instance (if any) and check for a new one.
+    if (client) { // If client object exists (means it was connected before)
+        Serial.println("Client disconnected. Stopping client instance.");
+        client.stop(); // Close the connection explicitly
+    }
+
+    client = server.available(); // Check for a new client connection request
+    if (client) {
+        Serial.println("\nNew client connected!");
+        // Optional: Set TCP NoDelay to potentially reduce latency for small packets (IMU)
+        // client.setNoDelay(true); // Uncomment if needed, test performance impact
+    } else {
+        // No client connected, wait a bit to prevent busy-looping
+        delay(50); // Small delay when idle
+        return; // Nothing more to do this loop iteration
+    }
   }
 
-  // --- If a client is connected, send data ---
-  if (client && client.connected()) {
+  // --- If a client is connected, proceed to read sensors and send data ---
+  if (client && client.connected()) { // Double-check client is valid and connected
+
+    bool success = true; // Flag to track if all writes succeed in this cycle
 
     // === I2S Audio Reading ===
     int32_t i2s_read_buffer[I2S_BUFFER_SAMPLES]; // Buffer for I2S data
     size_t bytes_read = 0;                       // Variable to store bytes read
 
-    // Read data from I2S into the buffer
+    // Read data from I2S into the buffer (BLOCKING call)
     esp_err_t result = i2s_read(I2S_PORT,
-                               i2s_read_buffer,
-                               I2S_BUFFER_SAMPLES * BYTES_PER_SAMPLE_BUFFER,
-                               &bytes_read,
-                               portMAX_DELAY); // Wait indefinitely for data
+                                i2s_read_buffer,
+                                I2S_BUFFER_SAMPLES * BYTES_PER_SAMPLE_BUFFER,
+                                &bytes_read,
+                                portMAX_DELAY); // Wait indefinitely for data
 
-    // === Send Audio Data over TCP ===
-    if (result == ESP_OK && bytes_read > 0) {
-        // *** Send Audio Data via TCP ***
-        client.write(AUDIO_DATA_ID); // Send the audio ID marker
-        client.write((uint8_t*)i2s_read_buffer, bytes_read); // Send the raw audio data
+                                
 
-        // --- Original Serial Write (Commented Out) ---
-        // Serial.write((uint8_t*)i2s_read_buffer, bytes_read);
-        // --- End Original ---
+    // === Send Audio Data over TCP (if read successfully) ===
+    if (success && result == ESP_OK && bytes_read > 0) {
+        uint8_t audio_id = AUDIO_DATA_ID; // Create a variable for the ID
+        // Send Audio ID marker
+        if (!writeAll(client, &audio_id, 1)) {
+            Serial.println("Failed to write Audio ID.");
+            success = false; // Mark as failed
+        }
+
+        // Send Audio data payload (only if ID was sent successfully)
+        if (success) {
+             if (!writeAll(client, (uint8_t*)i2s_read_buffer, bytes_read)) {
+                Serial.println("Failed to write Audio data buffer.");
+                success = false; // Mark as failed
+             }
+        }
     }
     else if (result != ESP_OK) {
         // Handle I2S read error (optional: print error)
-        // Serial.printf("I2S Read Error: %d\n", result);
+        Serial.printf("I2S Read Error: %d (%s)\n", result, esp_err_to_name(result));
+        // Decide if this is fatal or recoverable. Could continue without sending audio.
     }
 
-    // === IMU Reading ===
-    sensors_event_t accel;
-    sensors_event_t gyro;
-    sensors_event_t temp; // Temperature data is available but not sent in this example
-    lsm6ds.getEvent(&accel, &gyro, &temp); // Read sensor events
+    // === IMU Reading (only proceed if previous writes were okay) ===
+    IMU_Data_Packet imu_packet; // Declare here to ensure scope
+    if (success) {
+        sensors_event_t accel;
+        sensors_event_t gyro;
+        sensors_event_t temp; // Temperature data is available but not sent
+        lsm6ds.getEvent(&accel, &gyro, &temp); // Read sensor events
 
-    // Populate the IMU data packet structure
-    IMU_Data_Packet imu_packet;
-    imu_packet.ax = accel.acceleration.x;
-    imu_packet.ay = accel.acceleration.y;
-    imu_packet.az = accel.acceleration.z;
-    imu_packet.gx = gyro.gyro.x;
-    imu_packet.gy = gyro.gyro.y;
-    imu_packet.gz = gyro.gyro.z;
+        // Populate the IMU data packet structure
+        imu_packet.ax = accel.acceleration.x;
+        imu_packet.ay = accel.acceleration.y;
+        imu_packet.az = accel.acceleration.z;
+        imu_packet.gx = gyro.gyro.x;
+        imu_packet.gy = gyro.gyro.y;
+        imu_packet.gz = gyro.gyro.z;
+    }
 
-    // === Send IMU Data over TCP ===
-    // *** Send IMU Data via TCP ***
-    client.write(IMU_DATA_ID); // Send the IMU ID marker
-    client.write((uint8_t*)&imu_packet, sizeof(IMU_Data_Packet)); // Send the raw IMU data
+    // === Send IMU Data over TCP (only if previous steps were successful) ===
+    if (success) {
+        uint8_t imu_id = IMU_DATA_ID; // Create a variable for the ID
+        // Send IMU ID marker
+        if (!writeAll(client, &imu_id, 1)) {
+             Serial.println("Failed to write IMU ID.");
+            success = false; // Mark as failed
+        }
 
-    // --- Original Serial Write (Commented Out) ---
-    // Serial.write(imu_marker, sizeof(imu_marker));
-    // Serial.write((uint8_t*)&imu_packet, sizeof(IMU_Data_Packet));
-    // --- End Original ---
+        // Send IMU data payload (only if ID was sent successfully)
+        if (success) {
+            if (!writeAll(client, (uint8_t*)&imu_packet, sizeof(IMU_Data_Packet))) {
+                Serial.println("Failed to write IMU data packet.");
+                success = false; // Mark as failed
+            }
+        }
+    }
 
-    // --- Optional: Add a small delay if needed to prevent flooding ---
-    // delay(1); // Be cautious with delays in the main loop
+    // --- Handle Client Disconnection/Write Errors Detected by writeAll ---
+    if (!success) {
+        Serial.println("Write error or client disconnected during send. Closing connection.");
+        client.stop(); // Close the problematic client connection
+        // The next loop iteration will check server.available() for a new client.
+    }
+
+    // --- Optional: Small delay if needed ---
+    // delay(1); // Be very cautious adding delays here, it adds to the loop time.
+                 // Only use if absolutely necessary and keep it minimal.
+                 // The writeAll function already has a small delay(1) when writes block.
 
   } // End if(client && client.connected())
 

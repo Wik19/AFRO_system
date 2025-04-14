@@ -23,6 +23,10 @@ TARGET_AUDIO_NYQUIST_FREQ = (ORIGINAL_AUDIO_SAMPLE_RATE / AUDIO_DOWNSAMPLE_RATE)
 AUDIO_FILTER_ORDER = 6
 AUDIO_AAF_CUTOFF_HZ = TARGET_AUDIO_NYQUIST_FREQ * 0.9 # Anti-aliasing filter cutoff
 
+# --- Audio Settings ---
+AUDIO_SAMPLE_RATE = 16000  # Target sample rate in Hz
+AUDIO_CHUNK_SIZE = 512     # Number of samples per audio packet sent by ESP32 (I2S_READ_LEN / 2)
+
 # --- IMU Data Configuration ---
 IMU_MARKER = b'\xFF\xFE\xFD\xFC'  # Must match the marker sent by ESP32
 IMU_PACKET_FORMAT = '<ffffff'     # 6 little-endian floats (ax,ay,az,gx,gy,gz)

@@ -119,3 +119,5 @@ def receive_data_tcp(host, port, duration_seconds):
         return [], [], 0
 
     return audio_samples, imu_samples, actual_duration
+
+receive_data_tcp("192.168.78.42", 8088, 10)

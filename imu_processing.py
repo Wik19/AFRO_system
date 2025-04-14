@@ -1,170 +1,182 @@
 import numpy as np
-import numpy.fft as fft
+from scipy.signal import butter, filtfilt, detrend
 from scipy.integrate import cumulative_trapezoid
-import math
 import config
+import math
 
-def process_imu(all_imu_samples, duration):
+# ... (butter_lowpass, butter_lowpass_filter functions remain the same) ...
+
+def process_imu(imu_samples_raw, duration):
     """
-    Processes raw IMU samples: converts to numpy array, estimates sample rate,
-    calculates FFT, integrates accel/gyro, performs sensor fusion (Complementary Filter),
-    and saves data. Handles cases with few or no samples more robustly.
+    Processes the raw IMU data including filtering, integration, and FFT.
+
+    Args:
+        imu_samples_raw (list): List of raw IMU samples (tuples with 7 elements: ax,ay,az,gx,gy,gz,timestamp).
+        duration (float): The actual duration over which data was collected.
+
+    Returns:
+        tuple: Processed IMU data including numpy array, time axis, rates, FFT, etc.
+               Returns None for components if processing fails or input is empty.
     """
-    # Initialize all potential return values to None or empty equivalents
-    imu_data_np = None
-    imu_time_axis = None
-    effective_imu_sample_rate = None
-    fft_imu_freq = None
-    fft_imu_magnitude_z = None
-    velocity = None
-    position = None
-    angular_position = None
-    fused_angles = None
+    if not imu_samples_raw:
+        print("IMU processing skipped: No raw samples provided.")
+        return (None,) * 9 # Return tuple of Nones matching expected output count
 
-    COMP_FILTER_ALPHA = 0.98
+    print(f"\nProcessing {len(imu_samples_raw)} collected IMU samples...")
 
-    # --- Initial Check ---
-    if not all_imu_samples:
-        print("\nNo IMU samples received for processing.")
-        return None, None, None, None, None, None, None, None, None
-
-    print(f"\nProcessing {len(all_imu_samples)} collected IMU samples...")
     try:
-        # Convert to numpy array first
-        imu_data_np = np.array(all_imu_samples)
-        if imu_data_np.ndim == 1: # Handle case of only one sample
-             imu_data_np = imu_data_np.reshape(1, -1)
+        # Convert list of tuples (7 elements each) to a NumPy array
+        # Keep all 7 columns for now
+        imu_data_full_np = np.array(imu_samples_raw, dtype=np.float32)
+
+        # Separate timestamps and sensor data
+        timestamps_ms = imu_data_full_np[:, 6] # Timestamps are the 7th column (index 6)
+        imu_data_np = imu_data_full_np[:, :6]  # Sensor data is the first 6 columns
+
+        # Validate shape after selecting sensor data
         if imu_data_np.shape[1] != 6:
-             raise ValueError(f"IMU data has incorrect shape: {imu_data_np.shape}, expected (N, 6)")
-        print(f"Successfully converted IMU samples to numpy array with shape: {imu_data_np.shape}")
+             raise ValueError(f"IMU sensor data has incorrect shape after extraction: {imu_data_np.shape}, expected (N, 6)")
+
+        print(f"Successfully converted IMU samples to numpy array. Shape: {imu_data_np.shape}")
+
     except Exception as e:
-        print(f"Error converting IMU samples to numpy array: {e}")
-        # Return None for everything if conversion fails
-        return None, None, None, None, None, None, None, None, None
+        # Print shape of raw data if conversion fails
+        raw_shape_info = "Unknown"
+        if isinstance(imu_samples_raw, list) and len(imu_samples_raw) > 0:
+             raw_shape_info = f"({len(imu_samples_raw)}, {len(imu_samples_raw[0])})" if isinstance(imu_samples_raw[0], tuple) else "Irregular"
+        print(f"Error converting IMU samples to numpy array: {e}. Raw data info: List length {len(imu_samples_raw)}, First element shape: {raw_shape_info}")
+        return (None,) * 9
 
-    num_samples = len(imu_data_np)
+    num_samples = imu_data_np.shape[0]
+    if num_samples == 0:
+        print("IMU processing skipped: No samples after conversion.")
+        return (None,) * 9
 
-    # --- Check for sufficient data and duration for rate calculation ---
-    can_calculate_rate = duration > 0 and num_samples > 1
-    if can_calculate_rate:
-        effective_imu_sample_rate = num_samples / duration
-        print(f"Estimated Effective IMU Rate: {effective_imu_sample_rate:.2f} Hz")
-        imu_time_axis = np.arange(num_samples) / effective_imu_sample_rate
-        dt = 1.0 / effective_imu_sample_rate
+    # --- Calculate Effective Sample Rate ---
+    # Use actual duration if available and sensible, otherwise estimate from timestamps
+    if duration > 0.1 and num_samples > 1:
+         effective_imu_rate = num_samples / duration
+         print(f"Calculated Effective IMU Rate (from duration): {effective_imu_rate:.2f} Hz")
+         # Generate time axis based on duration
+         imu_time_axis = np.linspace(0, duration, num_samples, endpoint=False)
+    elif num_samples > 1:
+        # Estimate rate from timestamps (convert ms to s)
+        # Use diff on timestamps, handle potential issues like duplicate timestamps
+        time_diffs = np.diff(timestamps_ms) / 1000.0
+        valid_diffs = time_diffs[time_diffs > 0] # Avoid division by zero or negative time steps
+        if len(valid_diffs) > 0:
+            avg_time_step = np.mean(valid_diffs)
+            effective_imu_rate = 1.0 / avg_time_step
+            print(f"Calculated Effective IMU Rate (from timestamps): {effective_imu_rate:.2f} Hz")
+        else:
+            effective_imu_rate = config.IMU_SAMPLE_RATE # Fallback if timestamps are unusable
+            print(f"Warning: Could not calculate rate from timestamps. Falling back to config rate: {effective_imu_rate} Hz")
+        # Generate time axis from timestamps (convert ms to s)
+        imu_time_axis = (timestamps_ms - timestamps_ms[0]) / 1000.0
     else:
-        print("Not enough IMU data or duration to estimate sample rate or perform time-dependent processing (integration, fusion, FFT).")
-        # We have imu_data_np, but cannot calculate time axis or derived values
-        # Save raw data if available
-        try:
-            np.savetxt(config.OUTPUT_FILENAME_IMU, imu_data_np, delimiter=',',
-                       header='accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z', comments='')
-            print(f"Raw IMU data saved to '{config.OUTPUT_FILENAME_IMU}'")
-        except Exception as save_error:
-            print(f"Error saving raw IMU data: {save_error}")
-        # Return the raw data and None for everything else
-        return imu_data_np, None, None, None, None, None, None, None, None
+         effective_imu_rate = config.IMU_SAMPLE_RATE # Fallback for single sample
+         imu_time_axis = np.array([0.0])
+         print(f"Warning: Only one IMU sample. Using config rate: {effective_imu_rate} Hz")
 
-    # --- Proceed with time-dependent processing only if rate is valid ---
-    if can_calculate_rate:
-        # --- Sensor Fusion (Complementary Filter) ---
-        print("Performing sensor fusion (Complementary Filter)...")
-        fused_roll = 0.0
-        fused_pitch = 0.0
-        fused_yaw = 0.0
-        fused_angles_list = []
-        try:
-            for i in range(num_samples):
-                ax, ay, az, gx, gy, gz = imu_data_np[i]
-                # Basic check for valid numbers, skip sample if invalid
-                if not all(np.isfinite([ax, ay, az, gx, gy, gz])):
-                    print(f"Warning: Non-finite value encountered in IMU sample {i}, skipping fusion step.")
-                    # Append previous values or estimated values if possible
-                    if i > 0: fused_angles_list.append(fused_angles_list[-1])
-                    else: fused_angles_list.append((0.0, 0.0, 0.0)) # Append zeros if first sample is bad
-                    continue
 
-                # Use try-except for math operations that might fail (e.g., sqrt of negative)
-                try:
-                    accel_roll = math.atan2(ay, math.sqrt(ax**2 + az**2))
-                    accel_pitch = math.atan2(-ax, math.sqrt(ay**2 + az**2))
-                except ValueError: # Handle potential math domain errors
-                     print(f"Warning: Math domain error calculating accel angles for sample {i}. Using previous angles.")
-                     accel_roll = fused_roll # Use previous fused value as fallback
-                     accel_pitch = fused_pitch
+    # --- Filtering (Optional - Apply if needed) ---
+    # Example: Apply low-pass filter to accelerometer Z data
+    # cutoff_freq = effective_imu_rate * 0.4 # Example cutoff
+    # order = 4
+    # accel_z_filtered = butter_lowpass_filter(imu_data_np[:, 2], cutoff_freq, effective_imu_rate, order)
+    # imu_data_np[:, 2] = accel_z_filtered # Replace original with filtered
 
-                gyro_roll_delta = gx * dt
-                gyro_pitch_delta = gy * dt
-                gyro_yaw_delta = gz * dt
-                fused_roll = COMP_FILTER_ALPHA * (fused_roll + gyro_roll_delta) + (1 - COMP_FILTER_ALPHA) * accel_roll
-                fused_pitch = COMP_FILTER_ALPHA * (fused_pitch + gyro_pitch_delta) + (1 - COMP_FILTER_ALPHA) * accel_pitch
-                fused_yaw += gyro_yaw_delta
-                fused_angles_list.append((fused_roll, fused_pitch, fused_yaw))
-
-            if fused_angles_list: # Ensure list is not empty
-                 fused_angles = np.array(fused_angles_list)
-                 print("Sensor fusion complete.")
-            else:
-                 print("Sensor fusion could not be performed (no valid samples?).")
-                 fused_angles = None
-
-        except Exception as fusion_error:
-            print(f"Error during sensor fusion: {fusion_error}")
-            fused_angles = None
-
-        # --- Integrate Acceleration (Optional) ---
-        try:
-            print("Integrating acceleration...")
-            vel_x = cumulative_trapezoid(imu_data_np[:, 0], dx=dt, initial=0)
-            vel_y = cumulative_trapezoid(imu_data_np[:, 1], dx=dt, initial=0)
-            vel_z = cumulative_trapezoid(imu_data_np[:, 2], dx=dt, initial=0)
-            velocity = np.column_stack((vel_x, vel_y, vel_z))
-            pos_x = cumulative_trapezoid(vel_x, dx=dt, initial=0)
-            pos_y = cumulative_trapezoid(vel_y, dx=dt, initial=0)
-            pos_z = cumulative_trapezoid(vel_z, dx=dt, initial=0)
-            position = np.column_stack((pos_x, pos_y, pos_z))
-            print("Integration for position complete.")
-        except Exception as integ_accel_error:
-            print(f"Error during acceleration integration: {integ_accel_error}")
-            velocity = None
-            position = None
-
-        # --- Integrate Angular Velocity (Optional) ---
-        try:
-            print("Integrating angular velocity (raw)...")
-            ang_pos_x = cumulative_trapezoid(imu_data_np[:, 3], dx=dt, initial=0)
-            ang_pos_y = cumulative_trapezoid(imu_data_np[:, 4], dx=dt, initial=0)
-            ang_pos_z = cumulative_trapezoid(imu_data_np[:, 5], dx=dt, initial=0)
-            angular_position = np.column_stack((ang_pos_x, ang_pos_y, ang_pos_z))
-            print("Integration for raw angular position complete.")
-        except Exception as integ_gyro_error:
-            print(f"Error during angular velocity integration: {integ_gyro_error}")
-            angular_position = None
-
-        # --- Calculate IMU FFT (Example: Accel Z) ---
-        try:
-            print("Calculating IMU FFT (Accel Z)...")
-            accel_z = imu_data_np[:, 2]
-            N_imu = len(accel_z)
-            fft_imu_result = fft.fft(accel_z)
-            fft_imu_freq = fft.fftfreq(N_imu, d=dt)
-            fft_imu_magnitude_z = np.abs(fft_imu_result)
-            print("IMU FFT calculation complete.")
-        except Exception as fft_error:
-            print(f"Error during IMU FFT calculation: {fft_error}")
-            fft_imu_freq = None
-            fft_imu_magnitude_z = None
-
-    # --- Save IMU data (always save raw if available) ---
+    # --- Detrending (Remove linear drift) ---
+    # Detrend accelerometer and gyroscope data separately
     try:
-        np.savetxt(config.OUTPUT_FILENAME_IMU, imu_data_np, delimiter=',',
-                   header='accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z', comments='')
-        print(f"IMU data saved to '{config.OUTPUT_FILENAME_IMU}'")
-    except Exception as save_error:
-        print(f"Error saving IMU data: {save_error}")
+        imu_data_np[:, :3] = detrend(imu_data_np[:, :3], axis=0, type='linear') # Accelerometer
+        imu_data_np[:, 3:] = detrend(imu_data_np[:, 3:], axis=0, type='linear') # Gyroscope
+        print("IMU data detrended.")
+    except ValueError as e:
+        print(f"Warning: Could not detrend IMU data (possibly too few samples): {e}")
 
-    # --- Final Return ---
-    # Return whatever was successfully calculated
-    return (imu_data_np, imu_time_axis, effective_imu_sample_rate,
-            fft_imu_freq, fft_imu_magnitude_z,
-            velocity, position, angular_position,
-            fused_angles)
+
+    # --- Integration for Velocity and Position (from Accelerometer) ---
+    imu_velocity = np.zeros_like(imu_data_np[:, :3])
+    imu_position = np.zeros_like(imu_data_np[:, :3])
+    if num_samples > 1:
+        # Integrate acceleration to get velocity (m/s) - assumes initial velocity is 0
+        # Acceleration is in G's, convert to m/s^2 by multiplying by 9.81
+        accel_mps2 = imu_data_np[:, :3] * 9.81
+        imu_velocity = cumulative_trapezoid(accel_mps2, x=imu_time_axis, initial=0, axis=0)
+
+        # Integrate velocity to get position (m) - assumes initial position is 0
+        imu_position = cumulative_trapezoid(imu_velocity, x=imu_time_axis, initial=0, axis=0)
+        print("IMU velocity and position calculated.")
+    else:
+        print("Skipping IMU integration: requires more than one sample.")
+
+
+    # --- Integration for Angular Position (from Gyroscope) ---
+    imu_angular_position = np.zeros_like(imu_data_np[:, 3:])
+    if num_samples > 1:
+        # Gyro data is in degrees per second (dps), convert to radians per second
+        gyro_radps = np.radians(imu_data_np[:, 3:])
+        # Integrate angular velocity to get angular position (radians) - assumes initial angle is 0
+        imu_angular_position = cumulative_trapezoid(gyro_radps, x=imu_time_axis, initial=0, axis=0)
+        # Convert back to degrees for easier interpretation if desired
+        imu_angular_position = np.degrees(imu_angular_position)
+        print("IMU angular position calculated.")
+    else:
+        print("Skipping IMU angular integration: requires more than one sample.")
+
+    # --- Simple Complementary Filter for Orientation (Example) ---
+    imu_fused_angles = np.zeros((num_samples, 2)) # Roll, Pitch
+    if num_samples > 1 and effective_imu_rate > 0:
+        dt = 1.0 / effective_imu_rate
+        alpha = 0.98 # Complementary filter coefficient (adjust as needed)
+
+        accel_roll_rad = np.arctan2(imu_data_np[:, 1], imu_data_np[:, 2]) # atan2(ay, az)
+        accel_pitch_rad = np.arctan2(-imu_data_np[:, 0], np.sqrt(imu_data_np[:, 1]**2 + imu_data_np[:, 2]**2)) # atan2(-ax, sqrt(ay^2 + az^2))
+
+        gyro_radps = np.radians(imu_data_np[:, 3:]) # gx, gy, gz in rad/s
+
+        # Initialize first angle estimate
+        imu_fused_angles[0, 0] = np.degrees(accel_roll_rad[0])
+        imu_fused_angles[0, 1] = np.degrees(accel_pitch_rad[0])
+
+        for i in range(1, num_samples):
+            # Gyro integration step
+            gyro_angle_x = imu_fused_angles[i-1, 0] + np.degrees(gyro_radps[i, 0]) * dt # Roll from gx
+            gyro_angle_y = imu_fused_angles[i-1, 1] + np.degrees(gyro_radps[i, 1]) * dt # Pitch from gy
+
+            # Complementary filter
+            imu_fused_angles[i, 0] = alpha * gyro_angle_x + (1 - alpha) * np.degrees(accel_roll_rad[i]) # Roll
+            imu_fused_angles[i, 1] = alpha * gyro_angle_y + (1 - alpha) * np.degrees(accel_pitch_rad[i]) # Pitch
+        print("IMU fused angles (Roll, Pitch) calculated using complementary filter.")
+    else:
+        print("Skipping complementary filter: requires multiple samples and valid rate.")
+
+
+    # --- FFT Calculation (Example: Accelerometer Z-axis) ---
+    fft_imu_freq = None
+    fft_imu_mag_z = None
+    if num_samples > 1:
+        try:
+            accel_z = imu_data_np[:, 2] # Z-axis acceleration
+            fft_result = np.fft.fft(accel_z)
+            fft_freq = np.fft.fftfreq(num_samples, d=1.0/effective_imu_rate)
+
+            # Only take the positive frequencies
+            positive_freq_indices = np.where(fft_freq >= 0)
+            fft_imu_freq = fft_freq[positive_freq_indices]
+            # Calculate magnitude (and normalize if needed, e.g., by num_samples)
+            fft_imu_mag_z = np.abs(fft_result[positive_freq_indices]) / num_samples
+            print("IMU FFT calculated for Accelerometer Z-axis.")
+        except Exception as e:
+            print(f"Error calculating IMU FFT: {e}")
+    else:
+        print("Skipping IMU FFT: requires more than one sample.")
+
+
+    print("IMU processing complete.")
+    # Return the sensor data (N, 6), not the full data with timestamp
+    return (imu_data_np, imu_time_axis, effective_imu_rate, fft_imu_freq, fft_imu_mag_z,
+            imu_velocity, imu_position, imu_angular_position, imu_fused_angles)
+
+# ... (rest of the file, if any) ...
